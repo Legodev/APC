@@ -22,7 +22,7 @@ APC_LOGOUT = '4'
 
 APC_VERSION_PATTERN = re.compile(r' v(\d+\.\d+\.\d+)')
 
-APC_DEFAULT_HOST     = os.environ.get('APC_HOST',     '192.168.1.2')
+APC_DEFAULT_HOST     = os.environ.get('APC_HOST',     '192.168.12.200')
 APC_DEFAULT_USER     = os.environ.get('APC_USER',     'apc')
 APC_DEFAULT_PASSWORD = os.environ.get('APC_PASSWORD', 'apc')
 
@@ -85,7 +85,7 @@ class APCFactory:
         child.expect('Password  : ')
         child.send(password + '\r\n')
 
-        child.expect('Communication Established')
+        child.expect('Switched Rack PDU: Communication Established')
 
         header = child.before
 
@@ -101,6 +101,9 @@ class APCFactory:
 
         if version[0] == '3':
             apc = APC3(host, verbose, quiet)
+        elif version[0] == '2' and version[2] == '7':
+            print("found our APC")
+            apc = APCPI(host, verbose, quiet)
         else:
             apc = APC2(host, verbose, quiet)
 
@@ -372,3 +375,71 @@ class APC3(AbstractAPC):
         self.notify(outlet_name, "Delayed %s (delay=%d duration=%d)" % (str_cmd, delay, duration))
 
         self._escape_to_main()
+
+
+class APCPI(AbstractAPC):
+    APC_IMMEDIATE_ON     = '1'
+    APC_IMMEDIATE_OFF    = '2'
+    APC_IMMEDIATE_REBOOT = '3'
+    APC_DELAYED_ON       = '4'
+    APC_DELAYED_OFF      = '5'
+    APC_DELAYED_REBOOT   = '6'
+
+    def control_outlet(self, outlet):
+        self.sendnl('1')
+        self.sendnl('3')
+        self.sendnl(str(outlet))
+        self.sendnl('1')
+        self.child.before
+
+    def configure_outlet(self, outlet):
+        self.sendnl('1')
+        self.sendnl('3')
+        self.sendnl(str(outlet))
+        self.sendnl('2')
+        self.child.before
+
+    def get_command_result(self):
+        self.child.expect('Command successfully issued.')
+
+    def on_off_immediate(self, outlet, on):
+        (outlet, outlet_name) = self.get_outlet(outlet)
+
+        #self.set_power_delay(outlet, on, delay)
+        #self._escape_to_main()
+
+        self.control_outlet(outlet)
+        self.child.expect("Control Outlet")
+
+        if on:
+            cmd = self.APC_DELAYED_ON
+            str_cmd = 'On'
+        else:
+            cmd = self.APC_DELAYED_OFF
+            str_cmd = 'Off'
+
+        self.sendnl(cmd)
+        self.sendnl(APC_YES)
+
+        self.get_command_result()
+        self.sendnl('')
+
+        self.notify(outlet_name, "Immediate %s" % (str_cmd))
+
+        self._escape_to_main()
+
+    def status(self):
+        self.sendnl('1')
+        self.sendnl('3')
+        self.child.expect("------- Outlet Control/Configuration ------------------------------------------")
+        self.child.expect("<ESC>")
+        s = self.child.before
+        s = s.decode("utf-8")  # b'' -> string
+        s = s.strip()
+        rows = s.split("\n")
+        lst_outlets = []
+        for row in rows[:-1]:
+            ol = Outlet.parse(row.strip())
+            lst_outlets.append(ol)
+        ol_collection = Outlets(lst_outlets)
+        return ol_collection
